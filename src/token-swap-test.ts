@@ -528,6 +528,92 @@ export async function depositSingleTokenTypeExactAmountIn(): Promise<void> {
   console.log(depositB);
 }
 
+export async function withdrawSingleTokenTypeExactAmountOut(): Promise<void> {
+  // Pool token amount to withdraw on one side
+  const withdrawAmount = 50000;
+  const roundingAmount = 1.0001; // make math a little easier
+
+  const poolMintInfo = await getMint(connection, tokenPool);
+  const supply = Number(poolMintInfo.supply);
+
+  const swapTokenA = await getAccount(connection, tokenAccountA);
+  const swapTokenAPost = Number(swapTokenA.amount) - withdrawAmount;
+  const poolTokenA = tradingTokensToPoolTokens(
+    withdrawAmount,
+    swapTokenAPost,
+    supply
+  );
+  let adjustedPoolTokenA = poolTokenA * roundingAmount;
+  if (OWNER_WITHDRAW_FEE_NUMERATOR !== 0) {
+    adjustedPoolTokenA *=
+      1 + OWNER_WITHDRAW_FEE_NUMERATOR / OWNER_WITHDRAW_FEE_DENOMINATOR;
+  }
+  console.log(adjustedPoolTokenA);
+
+  const swapTokenB = await getAccount(connection, tokenAccountB);
+  const swapTokenBPost = Number(swapTokenB.amount) - withdrawAmount;
+  const poolTokenB = tradingTokensToPoolTokens(
+    withdrawAmount,
+    swapTokenBPost,
+    supply
+  );
+  let adjustedPoolTokenB = poolTokenB * roundingAmount;
+  if (OWNER_WITHDRAW_FEE_NUMERATOR !== 0) {
+    adjustedPoolTokenB *=
+      1 + OWNER_WITHDRAW_FEE_NUMERATOR / OWNER_WITHDRAW_FEE_DENOMINATOR;
+  }
+  console.log(adjustedPoolTokenB);
+
+  const userTransferAuthority = new web3.Account();
+  console.log("Creating withdraw token a account");
+  const userAccountA = await await createAccount(
+    connection,
+    owner,
+    mintA,
+    owner.publicKey,
+    new web3.Keypair()
+  );
+  console.log("Creating withdraw token b account");
+  const userAccountB = await createAccount(
+    connection,
+    owner,
+    mintB,
+    owner.publicKey,
+    new web3.Keypair()
+  );
+  console.log("Creating withdraw pool token account");
+  // const poolAccount = await getAccount(connection, tokenAccountPool);
+  // const poolTokenAmount = Number(poolAccount.amount);
+  await approve(
+    connection,
+    owner,
+    tokenAccountPool,
+    userTransferAuthority.publicKey,
+    owner,
+    Number(Math.floor(adjustedPoolTokenA + adjustedPoolTokenB)) // math.floor workaround error RangeError: The number 51897767.2578 cannot be converted to a BigInt because it is not an integer
+  );
+
+  console.log("Withdrawing token A only");
+  const withdrawA = await tokenSwap.withdrawSingleTokenTypeExactAmountOut(
+    userAccountA,
+    tokenAccountPool,
+    userTransferAuthority,
+    withdrawAmount,
+    adjustedPoolTokenA + adjustedPoolTokenA //double maximum to workaround slippage error
+  );
+  console.log(withdrawA);
+
+  console.log("Withdrawing token B only");
+  const withdrawB = await tokenSwap.withdrawSingleTokenTypeExactAmountOut(
+    userAccountB,
+    tokenAccountPool,
+    userTransferAuthority,
+    withdrawAmount,
+    adjustedPoolTokenB + adjustedPoolTokenB //double maximum to workaround slippage error
+  );
+  console.log(withdrawB);
+}
+
 function initializeKeypair(): web3.Keypair {
   const secret = JSON.parse(process.env.PRIVATE_KEY ?? "") as number[];
   const secretKey = Uint8Array.from(secret);

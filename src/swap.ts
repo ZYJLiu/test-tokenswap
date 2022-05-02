@@ -5,6 +5,7 @@ import {
   withdrawAllTokenTypes,
   swap,
   depositSingleTokenTypeExactAmountIn,
+  withdrawSingleTokenTypeExactAmountOut,
 } from "./token-swap-test";
 
 import Dotenv from "dotenv";
@@ -16,6 +17,7 @@ async function main() {
   await withdrawAllTokenTypes();
   await swap();
   await depositSingleTokenTypeExactAmountIn();
+  await withdrawSingleTokenTypeExactAmountOut();
 }
 main()
   .then(() => {
