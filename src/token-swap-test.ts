@@ -183,10 +183,7 @@ export async function createTokenSwap(): Promise<void> {
     CurveType.ConstantPrice,
     new BN(1)
   );
-  console.log(tokenSwap);
-
-  const balance = await connection.getBalance(swapPayer.publicKey);
-  console.log(balance / web3.LAMPORTS_PER_SOL);
+  // console.log(tokenSwap);
 
   console.log("loading token swap");
   const fetchedTokenSwap = await TokenSwap.loadTokenSwap(
@@ -196,13 +193,7 @@ export async function createTokenSwap(): Promise<void> {
     swapPayer
   );
 
-  console.log(fetchedTokenSwap);
-}
-function initializeKeypair(): web3.Keypair {
-  const secret = JSON.parse(process.env.PRIVATE_KEY ?? "") as number[];
-  const secretKey = Uint8Array.from(secret);
-  const keypairFromSecretKey = web3.Keypair.fromSecretKey(secretKey);
-  return keypairFromSecretKey;
+  // console.log(fetchedTokenSwap);
 }
 
 // depositAllTokenTypes
@@ -213,10 +204,14 @@ export async function depositAllTokenTypes(): Promise<void> {
   const tokenA = Math.floor(
     (Number(swapTokenA.amount) * POOL_TOKEN_AMOUNT) / supply
   );
+  console.log(tokenA);
+
   const swapTokenB = await getAccount(connection, tokenAccountB);
   const tokenB = Math.floor(
     (Number(swapTokenB.amount) * POOL_TOKEN_AMOUNT) / supply
   );
+  console.log(tokenB);
+
   const userTransferAuthority = new web3.Account();
   console.log("Creating depositor token a account");
   const userAccountA = await createAccount(
@@ -267,9 +262,12 @@ export async function depositAllTokenTypes(): Promise<void> {
     owner.publicKey,
     new web3.Keypair()
   );
-  const confirmOptions = {
-    skipPreflight: true,
-  };
+
+  // const userA = await getAccount(connection, userAccountA);
+  // console.log(Number(userA.amount));
+  // const userB = await getAccount(connection, userAccountB);
+  // console.log(Number(userB.amount));
+
   console.log("Depositing into swap");
   const deposit = await tokenSwap.depositAllTokenTypes(
     userAccountA,
@@ -281,4 +279,84 @@ export async function depositAllTokenTypes(): Promise<void> {
     tokenB
   );
   console.log(deposit);
+}
+
+export async function withdrawAllTokenTypes(): Promise<void> {
+  const poolMintInfo = await getMint(connection, tokenPool);
+  const supply = Number(poolMintInfo.supply); //toNumber not working?
+  const swapTokenA = await getAccount(connection, tokenAccountA);
+  const swapTokenB = await getAccount(connection, tokenAccountB);
+
+  let feeAmount = 0;
+  if (OWNER_WITHDRAW_FEE_NUMERATOR !== 0) {
+    feeAmount = Math.floor(
+      (POOL_TOKEN_AMOUNT * OWNER_WITHDRAW_FEE_NUMERATOR) /
+        OWNER_WITHDRAW_FEE_DENOMINATOR
+    );
+  }
+  const poolTokenAmount = POOL_TOKEN_AMOUNT - feeAmount;
+
+  const tokenA = Math.floor(
+    (Number(swapTokenA.amount) * poolTokenAmount) / supply
+  );
+
+  const tokenB = Math.floor(
+    (Number(swapTokenB.amount) * poolTokenAmount) / supply
+  );
+
+  console.log("Creating withdraw token A account");
+  const userAccountA = await createAccount(
+    connection,
+    owner,
+    mintA,
+    owner.publicKey,
+    new web3.Keypair()
+  );
+
+  console.log("Creating withdraw token B account");
+  const userAccountB = await createAccount(
+    connection,
+    owner,
+    mintB,
+    owner.publicKey,
+    new web3.Keypair()
+  );
+
+  const userTransferAuthority = new web3.Account();
+  console.log("Approving withdrawal from pool account");
+  await approve(
+    connection,
+    owner,
+    tokenAccountPool,
+    userTransferAuthority.publicKey,
+    owner,
+    POOL_TOKEN_AMOUNT
+  );
+
+  console.log("Withdrawing pool tokens for A and B tokens");
+  const withdraw = await tokenSwap.withdrawAllTokenTypes(
+    userAccountA,
+    userAccountB,
+    tokenAccountPool,
+    userTransferAuthority,
+    POOL_TOKEN_AMOUNT,
+    tokenA - 100, // not sure why slippage causing to fail, -100 as workaround
+    tokenB - 100 // not sure why slippage causing to fail, -100 as workaround
+  );
+  console.log(withdraw);
+
+  // console.log(Number(swapTokenA.amount));
+  // console.log(Number(swapTokenB.amount));
+
+  // console.log(poolTokenAmount);
+  // console.log(POOL_TOKEN_AMOUNT);
+  //   // console.log(tokenA);
+  //   // console.log(tokenB);
+}
+
+function initializeKeypair(): web3.Keypair {
+  const secret = JSON.parse(process.env.PRIVATE_KEY ?? "") as number[];
+  const secretKey = Uint8Array.from(secret);
+  const keypairFromSecretKey = web3.Keypair.fromSecretKey(secretKey);
+  return keypairFromSecretKey;
 }
