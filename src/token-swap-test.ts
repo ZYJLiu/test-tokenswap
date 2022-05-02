@@ -8,6 +8,9 @@ import {
   getMint,
   getAccount,
   approve,
+  Mint,
+  getOrCreateAssociatedTokenAccount,
+  Account,
 } from "@solana/spl-token";
 
 import {
@@ -34,7 +37,7 @@ let bumpSeed: number;
 let owner: web3.Keypair;
 // Token pool
 let tokenPool: web3.PublicKey;
-let tokenAccountPool: web3.PublicKey;
+let tokenAccountPool: Account;
 let feeAccount: web3.PublicKey;
 // Tokens swapped
 let mintA: web3.PublicKey;
@@ -42,6 +45,7 @@ let mintB: web3.PublicKey;
 let tokenAccountA: web3.PublicKey;
 let tokenAccountB: web3.PublicKey;
 
+// NOTE: Not sure what this is for
 // Hard-coded fee address
 const SWAP_PROGRAM_OWNER_FEE_ADDRESS =
   process.env.SWAP_PROGRAM_OWNER_FEE_ADDRESS;
@@ -61,6 +65,7 @@ let currentSwapTokenA = 1000000;
 let currentSwapTokenB = 1000000;
 let currentFeeAmount = 0;
 
+// NOTE: Not sure reason for calculations / different numbers, or what is HOST
 // Swap instruction constants
 // Because there is no withdraw fee in the production version, these numbers
 // need to get slightly tweaked in the two cases.
@@ -83,9 +88,12 @@ const connection = new web3.Connection("http://127.0.0.1:8899", "confirmed");
 
 // createTokenSwap
 export async function createTokenSwap(): Promise<void> {
+  // owner is from .env file
   owner = initializeKeypair();
   console.log("owner:", owner.publicKey.toString());
   await connection.requestAirdrop(owner.publicKey, web3.LAMPORTS_PER_SOL * 2);
+
+  // swapPayer randomly generated
   const swapPayer = new web3.Account();
   console.log("swapPayer:", swapPayer.publicKey.toString());
   await connection.requestAirdrop(
@@ -93,30 +101,35 @@ export async function createTokenSwap(): Promise<void> {
     web3.LAMPORTS_PER_SOL * 2
   );
 
+  // tokenSwapAccount is randomly generated keypair to use when initializing TokenSwap
   const tokenSwapAccount = new web3.Account();
 
+  // authority is a PDA found using tokenSwapAccount and TOKEN_SWAP_PROGRAM_ID as seeds
   [authority, bumpSeed] = await web3.PublicKey.findProgramAddress(
     [tokenSwapAccount.publicKey.toBuffer()],
     TOKEN_SWAP_PROGRAM_ID
   );
 
-  // const balance = await connection.getBalance(swapPayer.publicKey);
-  // console.log(balance / web3.LAMPORTS_PER_SOL);
+  console.log("tokenSwapAccount:", tokenSwapAccount.publicKey.toString());
 
   console.log("creating pool mint");
+  // tokenPool is a TOKEN MINT for pool token
   tokenPool = await createMint(connection, owner, authority, null, 2);
   console.log("tokenPool:", tokenPool.toString());
 
   console.log("creating pool account");
-  tokenAccountPool = await createAccount(
+  // tokenAccountPool is a TOKEN ACCOUNT associated with tokenPool MINT
+  // this TOKEN ACCOUNT will be minted pool tokens when TokenSwap is initialized
+  tokenAccountPool = await getOrCreateAssociatedTokenAccount(
     connection,
     owner,
     tokenPool,
     owner.publicKey
-    // new web3.Keypair()
   );
-  console.log("tokenAccountPool:", tokenAccountPool.toString());
+  console.log("tokenAccountPool:", tokenAccountPool.address.toString());
 
+  // feeAccount is a TOKEN ACCOUNT associated with tokenPool MINT
+  // fees collected will be minted to this TOKEN ACCOUNT
   feeAccount = await createAccount(
     connection,
     owner,
@@ -126,12 +139,13 @@ export async function createTokenSwap(): Promise<void> {
   );
   console.log("feeAccountPool:", feeAccount.toString());
 
-  // const ownerKey = SWAP_PROGRAM_OWNER_FEE_ADDRESS || owner.publicKey.toString();
-
   console.log("creating token A");
+  // mintA is a TOKEN MINT for token A
   mintA = await createMint(connection, owner, owner.publicKey, null, 2);
   console.log("mintA:", mintA.toString());
 
+  // tokenAccountA is a TOKEN ACCOUNT associated with mintA MINT
+  // tokenAccountA is owned by authority (PDA)
   tokenAccountA = await createAccount(
     connection,
     owner,
@@ -140,6 +154,7 @@ export async function createTokenSwap(): Promise<void> {
     new web3.Keypair()
   );
   console.log("tokenA:", tokenAccountA.toString());
+  // mint Token A tokens to tokenAccountA TOKEN ACCOUNT
   await mintTo(
     connection,
     owner,
@@ -150,9 +165,12 @@ export async function createTokenSwap(): Promise<void> {
   );
 
   console.log("creating token B");
+  // mintB is a TOKEN MINT for token B
   mintB = await createMint(connection, owner, owner.publicKey, null, 2);
   console.log("mintB:", mintB.toString());
 
+  // tokenAccountB is a TOKEN ACCOUNT associated with mintB MINT
+  // tokenAccountB is owned by authority (PDA)
   tokenAccountB = await createAccount(
     connection,
     owner,
@@ -161,6 +179,7 @@ export async function createTokenSwap(): Promise<void> {
     new web3.Keypair()
   );
   console.log("tokenB:", tokenAccountB.toString());
+  // mint Token B tokens to tokenAccountB TOKEN ACCOUNT
   await mintTo(
     connection,
     owner,
@@ -173,16 +192,16 @@ export async function createTokenSwap(): Promise<void> {
   // call createTokenSwap instruction on TokenSwap Program
   tokenSwap = await TokenSwap.createTokenSwap(
     connection,
-    swapPayer,
-    tokenSwapAccount,
-    authority,
-    tokenAccountA,
-    tokenAccountB,
-    tokenPool,
-    mintA,
-    mintB,
-    feeAccount,
-    tokenAccountPool,
+    swapPayer, // Pays for the transaction, requires type "Account" even though depreciated
+    tokenSwapAccount, // The token swap account, requires type "Account" even though depreciated
+    authority, // The authority over the swap and accounts
+    tokenAccountA, // The token swap's Token A account, owner is authority (PDA)
+    tokenAccountB, // The token swap's Token B account, owner is authority (PDA)
+    tokenPool, // The pool token MINT
+    mintA, // The mint of Token A
+    mintB, // The mint of Token B
+    feeAccount, // pool token TOKEN ACCOUNT where fees are sent
+    tokenAccountPool.address, // pool token TOKEN ACCOUNT where initial pool tokens are minted to when creating Token Swap
     TOKEN_SWAP_PROGRAM_ID,
     TOKEN_PROGRAM_ID,
     TRADING_FEE_NUMERATOR,
@@ -191,117 +210,159 @@ export async function createTokenSwap(): Promise<void> {
     OWNER_TRADING_FEE_DENOMINATOR,
     OWNER_WITHDRAW_FEE_NUMERATOR,
     OWNER_WITHDRAW_FEE_DENOMINATOR,
-    HOST_FEE_NUMERATOR,
+    HOST_FEE_NUMERATOR, // NOTE: not sure what HOST refers to
     HOST_FEE_DENOMINATOR,
-    CurveType.ConstantPrice,
-    new BN(1)
+    CurveType.ConstantPrice, // NOTE: not really sure CurveType calculations, constant price/product
+    new BN(1) // NOTE: not sure what curveParameters number means
   );
-
-  await sleep(1000);
   // console.log(tokenSwap);
 
-  // console.log("loading token swap");
-  // const fetchedTokenSwap = await TokenSwap.loadTokenSwap(
-  //   connection,
-  //   tokenSwapAccount.publicKey,
-  //   TOKEN_SWAP_PROGRAM_ID,
-  //   swapPayer
-  // );
+  // wait for transaction to complete
+  await sleep(1000);
+
+  // loadTokenSwap returns info about a TokenSwap using its address
+  console.log("loading token swap");
+  const fetchedTokenSwap = await TokenSwap.loadTokenSwap(
+    connection,
+    tokenSwapAccount.publicKey,
+    TOKEN_SWAP_PROGRAM_ID,
+    swapPayer
+  );
 
   // console.log(fetchedTokenSwap);
 }
 
-// depositAllTokenTypes
+// depositAllTokenTypes - deposits Token A and Token B, then mints pool token to depositor
 export async function depositAllTokenTypes(): Promise<void> {
+  // tokenPool MINT info
   const poolMintInfo = await getMint(connection, tokenPool);
+  // tokenPool MINT supply
   const supply = Number(poolMintInfo.supply); //toNumber not working?
+  console.log("tokenPool supply:", supply);
+
+  // tokenAccountA TOKEN ACCOUNT (owned by TokenSwap)
   const swapTokenA = await getAccount(connection, tokenAccountA);
-  const tokenA = Math.floor(
+
+  // tokenA is amount to deposit, NOTE: not sure what calculation is for
+  const amountTokenA = Math.floor(
     (Number(swapTokenA.amount) * POOL_TOKEN_AMOUNT) / supply
   );
-  // console.log(tokenA);
+  console.log("Token A Deposit Amount:", amountTokenA);
 
   const swapTokenB = await getAccount(connection, tokenAccountB);
-  const tokenB = Math.floor(
+  const amountTokenB = Math.floor(
     (Number(swapTokenB.amount) * POOL_TOKEN_AMOUNT) / supply
   );
-  // console.log(tokenB);
+  console.log("Token B Deposit Amount:", amountTokenB);
 
+  // userTransferAuthority is random keypair used as delegate over user token A and B accounts for deposit
   const userTransferAuthority = new web3.Account();
+
   console.log("Creating depositor token a account");
-  const userAccountA = await createAccount(
+  // userAccountA is user's Token A TOKEN ACCOUNT
+  const userAccountA = await getOrCreateAssociatedTokenAccount(
     connection,
     owner,
     mintA,
-    owner.publicKey,
-    new web3.Keypair()
+    owner.publicKey
+  );
+  console.log("userAccountA:", userAccountA.address.toString());
+
+  // mint Token A to userAccountA TOKEN ACCOUNT
+  await mintTo(
+    connection,
+    owner,
+    mintA,
+    userAccountA.address,
+    owner,
+    amountTokenA
   );
 
-  console.log("userAccountA:", userAccountA.toString());
-
-  await mintTo(connection, owner, mintA, userAccountA, owner, tokenA);
+  // delegate userTransferAuthority to tranfer tokenA amount of tokens
   await approve(
     connection,
     owner,
-    userAccountA,
+    userAccountA.address,
     userTransferAuthority.publicKey,
     owner,
-    tokenA
+    amountTokenA
   );
 
   console.log("Creating depositor token b account");
-  const userAccountB = await createAccount(
+  // userAccountB is user's Token B TOKEN ACCOUNT
+  const userAccountB = await getOrCreateAssociatedTokenAccount(
     connection,
     owner,
     mintB,
-    owner.publicKey,
-    new web3.Keypair()
+    owner.publicKey
   );
 
-  console.log("userAccountB:", userAccountB.toString());
+  console.log("userAccountB:", userAccountB.address.toString());
 
-  await mintTo(connection, owner, mintB, userAccountB, owner, tokenB);
+  // mint Token B to userAccountB TOKEN ACCOUNT
+  await mintTo(
+    connection,
+    owner,
+    mintB,
+    userAccountB.address,
+    owner,
+    amountTokenB
+  );
+
+  // delegate userTransferAuthority for tokenA amount of tokens
   await approve(
     connection,
     owner,
-    userAccountB,
+    userAccountB.address,
     userTransferAuthority.publicKey,
     owner,
-    tokenB
-  );
-  console.log("Creating depositor pool token account");
-  const newAccountPool = await createAccount(
-    connection,
-    owner,
-    tokenPool,
-    owner.publicKey,
-    new web3.Keypair()
+    amountTokenB
   );
 
-  // const userA = await getAccount(connection, userAccountA);
-  // console.log(Number(userA.amount));
-  // const userB = await getAccount(connection, userAccountB);
-  // console.log(Number(userB.amount));
+  // // NOTE: Not using newAccountPool, using existing tokenAccountPool
+  // console.log("Creating depositor pool token account");
+  // const newAccountPool = await createAccount(
+  //   connection,
+  //   owner,
+  //   tokenPool,
+  //   owner.publicKey,
+  //   new web3.Keypair()
+  // );
+
+  const userA = await getAccount(connection, userAccountA.address);
+  console.log("userAccountA Balance:", Number(userA.amount));
+  const userB = await getAccount(connection, userAccountB.address);
+  console.log("userAccountA Balance:", Number(userB.amount));
 
   console.log("Depositing into swap");
   const deposit = await tokenSwap.depositAllTokenTypes(
-    userAccountA,
-    userAccountB,
-    newAccountPool,
+    userAccountA.address,
+    userAccountB.address,
+    tokenAccountPool.address, // TEST: using tokenAccountPool instead of newAccountPool
     userTransferAuthority,
-    POOL_TOKEN_AMOUNT,
-    tokenA,
-    tokenB
+    POOL_TOKEN_AMOUNT, // Amount of pool tokens to mint, not sure how this would be calculated
+    amountTokenA,
+    amountTokenB
   );
-  console.log(deposit);
+  console.log("Deposit Transaction:", deposit);
+
+  // wait for transaction to complete
+  await sleep(1000);
 }
 
 export async function withdrawAllTokenTypes(): Promise<void> {
+  // tokenPool Mint info
   const poolMintInfo = await getMint(connection, tokenPool);
+  // tokenPool Mint supply
   const supply = Number(poolMintInfo.supply);
+  console.log("tokenPool supply:", supply);
+
+  // Token A TOKEN ACCOUNT controlled by TokenSwap
   const swapTokenA = await getAccount(connection, tokenAccountA);
+  // Token B TOKEN ACCOUNT controlled by TokenSwap
   const swapTokenB = await getAccount(connection, tokenAccountB);
 
+  // NOTE: 0 fee
   let feeAmount = 0;
   if (OWNER_WITHDRAW_FEE_NUMERATOR !== 0) {
     feeAmount = Math.floor(
@@ -309,32 +370,40 @@ export async function withdrawAllTokenTypes(): Promise<void> {
         OWNER_WITHDRAW_FEE_DENOMINATOR
     );
   }
+
+  console.log("Fee:", feeAmount);
+
+  // NOTE: 0 fee
   const poolTokenAmount = POOL_TOKEN_AMOUNT - feeAmount;
 
-  const tokenA = Math.floor(
+  // amountTokenA to withdraw, not sure what calculation is for
+  const amountTokenA = Math.floor(
     (Number(swapTokenA.amount) * poolTokenAmount) / supply
   );
 
-  const tokenB = Math.floor(
+  console.log(amountTokenA);
+
+  // amountTokenA to withdraw, not sure what calculation is for
+  const amountTokenB = Math.floor(
     (Number(swapTokenB.amount) * poolTokenAmount) / supply
   );
 
+  console.log(amountTokenB);
+
   console.log("Creating withdraw token A account");
-  const userAccountA = await createAccount(
+  const userAccountA = await getOrCreateAssociatedTokenAccount(
     connection,
     owner,
     mintA,
-    owner.publicKey,
-    new web3.Keypair()
+    owner.publicKey
   );
 
   console.log("Creating withdraw token B account");
-  const userAccountB = await createAccount(
+  const userAccountB = await getOrCreateAssociatedTokenAccount(
     connection,
     owner,
     mintB,
-    owner.publicKey,
-    new web3.Keypair()
+    owner.publicKey
   );
 
   const userTransferAuthority = new web3.Account();
@@ -342,7 +411,7 @@ export async function withdrawAllTokenTypes(): Promise<void> {
   await approve(
     connection,
     owner,
-    tokenAccountPool,
+    tokenAccountPool.address,
     userTransferAuthority.publicKey,
     owner,
     POOL_TOKEN_AMOUNT
@@ -350,15 +419,15 @@ export async function withdrawAllTokenTypes(): Promise<void> {
 
   console.log("Withdrawing pool tokens for A and B tokens");
   const withdraw = await tokenSwap.withdrawAllTokenTypes(
-    userAccountA,
-    userAccountB,
-    tokenAccountPool,
+    userAccountA.address,
+    userAccountB.address,
+    tokenAccountPool.address,
     userTransferAuthority,
     POOL_TOKEN_AMOUNT,
-    tokenA - 100, // not sure why slippage causing to fail, -100 as workaround
-    tokenB - 100 // not sure why slippage causing to fail, -100 as workaround
+    amountTokenA - 100, // not sure why slippage causing to fail, -100 as workaround
+    amountTokenB - 100 // not sure why slippage causing to fail, -100 as workaround
   );
-  console.log(withdraw);
+  console.log("Withdraw Transaction:", withdraw);
 
   // console.log(Number(swapTokenA.amount));
   // console.log(Number(swapTokenB.amount));
@@ -371,35 +440,42 @@ export async function withdrawAllTokenTypes(): Promise<void> {
 
 export async function swap(): Promise<void> {
   console.log("Creating swap token a account");
-  let userAccountA = await createAccount(
+  const userAccountA = await getOrCreateAssociatedTokenAccount(
     connection,
     owner,
     mintA,
-    owner.publicKey,
-    new web3.Keypair()
+    owner.publicKey
   );
 
-  await mintTo(connection, owner, mintA, userAccountA, owner, SWAP_AMOUNT_IN);
+  await mintTo(
+    connection,
+    owner,
+    mintA,
+    userAccountA.address,
+    owner,
+    SWAP_AMOUNT_IN
+  );
   const userTransferAuthority = new web3.Account();
   await approve(
     connection,
     owner,
-    userAccountA,
+    userAccountA.address,
     userTransferAuthority.publicKey,
     owner,
     SWAP_AMOUNT_IN
   );
 
   console.log("Creating swap token b account");
-  let userAccountB = await createAccount(
+  const userAccountB = await getOrCreateAssociatedTokenAccount(
     connection,
     owner,
     mintB,
-    owner.publicKey,
-    new web3.Keypair()
+    owner.publicKey
   );
 
-  let poolAccount = SWAP_PROGRAM_OWNER_FEE_ADDRESS
+  // hostFeeAccount is TOKEN ACCOUNT to collect fees in pool token
+  // different from the feeAccountPool TOKEN ACCOUNT set when TokenSwap was created
+  let hostFeeAccount = SWAP_PROGRAM_OWNER_FEE_ADDRESS
     ? await await createAccount(
         connection,
         owner,
@@ -411,18 +487,20 @@ export async function swap(): Promise<void> {
 
   console.log("Swapping");
   const swap = await tokenSwap.swap(
-    userAccountA,
+    userAccountA.address,
     tokenAccountA,
     tokenAccountB,
-    userAccountB,
-    poolAccount,
+    userAccountB.address,
+    hostFeeAccount,
     userTransferAuthority,
     SWAP_AMOUNT_IN,
     SWAP_AMOUNT_OUT
   );
-  console.log(swap);
+  console.log("Swap Transation:", swap);
+  await sleep(1000);
 }
 
+// NOTE: not sure what this calculation is for
 function tradingTokensToPoolTokens(
   sourceAmount: number,
   swapSourceAmount: number,
@@ -435,92 +513,134 @@ function tradingTokensToPoolTokens(
   return Math.floor(poolAmount * (root - 1));
 }
 
-export async function depositSingleTokenTypeExactAmountIn(): Promise<void> {
+export async function depositSingleTokenTypeExactAmountInA(): Promise<void> {
   // Pool token amount to deposit on one side
   const depositAmount = 10000;
 
   const poolMintInfo = await getMint(connection, tokenPool);
   const supply = Number(poolMintInfo.supply);
+  console.log("tokenPool supply:", supply);
 
   const swapTokenA = await getAccount(connection, tokenAccountA);
-  console.log(Number(swapTokenA.amount));
   const poolTokenA = tradingTokensToPoolTokens(
     depositAmount,
     Number(swapTokenA.amount),
     supply
   );
+
+  console.log("swapTokenA supply:", Number(swapTokenA.amount));
+  console.log("poolTokenA amount:", Number(poolTokenA));
+
+  const userTransferAuthority = new web3.Account();
+
+  console.log("Creating depositor token a account");
+  const userAccountA = await getOrCreateAssociatedTokenAccount(
+    connection,
+    owner,
+    mintA,
+    owner.publicKey
+  );
+
+  await mintTo(
+    connection,
+    owner,
+    mintA,
+    userAccountA.address,
+    owner,
+    depositAmount
+  );
+
+  await approve(
+    connection,
+    owner,
+    userAccountA.address,
+    userTransferAuthority.publicKey,
+    owner,
+    depositAmount
+  );
+
+  // // NOTE: Not using newAccountPool, using existing tokenAccountPool
+  // console.log("Creating depositor pool token account");
+  // const newAccountPool = await createAccount(
+  //   connection,
+  //   owner,
+  //   tokenPool,
+  //   owner.publicKey,
+  //   new web3.Keypair()
+  // );
+
+  console.log("Depositing token A into swap");
+  const depositA = await tokenSwap.depositSingleTokenTypeExactAmountIn(
+    userAccountA.address,
+    tokenAccountPool.address,
+    userTransferAuthority,
+    depositAmount,
+    poolTokenA
+  );
+
+  await sleep(1000);
+}
+
+export async function depositSingleTokenTypeExactAmountInB(): Promise<void> {
+  // Pool token amount to deposit on one side
+  const depositAmount = 10000;
+
+  const poolMintInfo = await getMint(connection, tokenPool);
+  const supply = Number(poolMintInfo.supply);
+  console.log("tokenPool supply:", supply);
+
+  // // NOTE: Not using newAccountPool, using existing tokenAccountPool
+  // console.log("Creating depositor pool token account");
+  // const newAccountPool = await createAccount(
+  //   connection,
+  //   owner,
+  //   tokenPool,
+  //   owner.publicKey,
+  //   new web3.Keypair()
+  // );
+
   const swapTokenB = await getAccount(connection, tokenAccountB);
-  console.log(Number(swapTokenB.amount));
   const poolTokenB = tradingTokensToPoolTokens(
     depositAmount,
     Number(swapTokenB.amount),
     supply
   );
 
+  console.log("swapTokenB supply:", Number(swapTokenB.amount));
+  console.log("poolTokenB amount:", Number(poolTokenB));
+
   const userTransferAuthority = new web3.Account();
-  console.log("Creating depositor token a account");
-  const userAccountA = await createAccount(
-    connection,
-    owner,
-    mintA,
-    owner.publicKey,
-    new web3.Keypair()
-  );
-  await mintTo(connection, owner, mintA, userAccountA, owner, depositAmount);
-  await approve(
-    connection,
-    owner,
-    userAccountA,
-    userTransferAuthority.publicKey,
-    owner,
-    depositAmount
-  );
 
   console.log("Creating depositor token b account");
-  const userAccountB = await createAccount(
+  const userAccountB = await getOrCreateAssociatedTokenAccount(
     connection,
     owner,
     mintB,
-    owner.publicKey,
-    new web3.Keypair()
+    owner.publicKey
   );
-  await mintTo(connection, owner, mintB, userAccountB, owner, depositAmount);
+  await mintTo(
+    connection,
+    owner,
+    mintB,
+    userAccountB.address,
+    owner,
+    depositAmount
+  );
   await approve(
     connection,
     owner,
-    userAccountB,
+    userAccountB.address,
     userTransferAuthority.publicKey,
     owner,
     depositAmount
   );
 
-  console.log("Creating depositor pool token account");
-  const newAccountPool = await createAccount(
-    connection,
-    owner,
-    tokenPool,
-    owner.publicKey,
-    new web3.Keypair()
-  );
-
-  console.log(poolTokenA);
-
-  console.log("Depositing token A into swap");
-  const depositA = await tokenSwap.depositSingleTokenTypeExactAmountIn(
-    userAccountA,
-    newAccountPool,
-    userTransferAuthority,
-    depositAmount,
-    poolTokenA
-  );
-  console.log(depositA);
-
-  console.log(poolTokenB);
-
+  //NOTE: Not sure why only Token B deposit causing slippage error
+  // tried separating transactions/ordering but still only Token B deposit has error
   console.log("Depositing token B into swap");
   const depositB = await tokenSwap.depositSingleTokenTypeExactAmountIn(
-    userAccountB,
-    newAccountPool,
+    userAccountB.address,
+    tokenAccountPool.address,
     userTransferAuthority,
     depositAmount,
     poolTokenB - poolTokenB // slippage causing error, set minimum to 0
@@ -566,20 +686,18 @@ export async function withdrawSingleTokenTypeExactAmountOut(): Promise<void> {
 
   const userTransferAuthority = new web3.Account();
   console.log("Creating withdraw token a account");
-  const userAccountA = await await createAccount(
+  const userAccountA = await getOrCreateAssociatedTokenAccount(
     connection,
     owner,
     mintA,
-    owner.publicKey,
-    new web3.Keypair()
+    owner.publicKey
   );
   console.log("Creating withdraw token b account");
-  const userAccountB = await createAccount(
+  const userAccountB = await getOrCreateAssociatedTokenAccount(
     connection,
     owner,
     mintB,
-    owner.publicKey,
-    new web3.Keypair()
+    owner.publicKey
   );
   console.log("Creating withdraw pool token account");
   // const poolAccount = await getAccount(connection, tokenAccountPool);
@@ -587,26 +705,28 @@ export async function withdrawSingleTokenTypeExactAmountOut(): Promise<void> {
   await approve(
     connection,
     owner,
-    tokenAccountPool,
+    tokenAccountPool.address,
     userTransferAuthority.publicKey,
     owner,
     Number(Math.floor(adjustedPoolTokenA + adjustedPoolTokenB)) // math.floor workaround error RangeError: The number 51897767.2578 cannot be converted to a BigInt because it is not an integer
   );
 
+  //NOTE: error with slippage calculation
   console.log("Withdrawing token A only");
   const withdrawA = await tokenSwap.withdrawSingleTokenTypeExactAmountOut(
-    userAccountA,
-    tokenAccountPool,
+    userAccountA.address,
+    tokenAccountPool.address,
     userTransferAuthority,
     withdrawAmount,
     adjustedPoolTokenA + adjustedPoolTokenA //double maximum to workaround slippage error
   );
   console.log(withdrawA);
 
+  //NOTE: error with slippage calculation
   console.log("Withdrawing token B only");
   const withdrawB = await tokenSwap.withdrawSingleTokenTypeExactAmountOut(
-    userAccountB,
-    tokenAccountPool,
+    userAccountB.address,
+    tokenAccountPool.address,
     userTransferAuthority,
     withdrawAmount,
     adjustedPoolTokenB + adjustedPoolTokenB //double maximum to workaround slippage error

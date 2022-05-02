@@ -4,7 +4,8 @@ import {
   depositAllTokenTypes,
   withdrawAllTokenTypes,
   swap,
-  depositSingleTokenTypeExactAmountIn,
+  depositSingleTokenTypeExactAmountInA,
+  depositSingleTokenTypeExactAmountInB,
   withdrawSingleTokenTypeExactAmountOut,
 } from "./token-swap-test";
 
@@ -16,7 +17,8 @@ async function main() {
   await depositAllTokenTypes();
   await withdrawAllTokenTypes();
   await swap();
-  await depositSingleTokenTypeExactAmountIn();
+  await depositSingleTokenTypeExactAmountInA();
+  await depositSingleTokenTypeExactAmountInB();
   await withdrawSingleTokenTypeExactAmountOut();
 }
 main()
